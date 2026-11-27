@@ -1,6 +1,6 @@
 # GBA Pokémon Emerald (BPEE) Chinese Pinyin IME
 
-一个自包含、可复用的 **GBA 宝可梦绿宝石（`BPEE` / `pokeemerald-expansion`）离线中文拼音输入法模块**（方案 A：命名界面第 4 页 / Page 3），基于 ARMIPS 汇编补丁实现，无第三方 Python 依赖。
+一个自包含、可复用的 **GBA 宝可梦绿宝石（`BPEE` / `pokeemerald-expansion`）离线中文拼音输入法模块**，基于 ARMIPS 汇编补丁实现，无第三方 Python 依赖。
 
 ## 核心特性
 
