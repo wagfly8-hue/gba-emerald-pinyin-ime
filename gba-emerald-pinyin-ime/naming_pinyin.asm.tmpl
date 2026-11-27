@@ -1,0 +1,1636 @@
+; ============================================================================
+; Reusable GBA Pokemon (BPEE / Emerald) Chinese Pinyin IME (Solution A - Page 3)
+; Auto-generated from naming_pinyin.asm.tmpl by build_pinyin_ime.py
+; ============================================================================
+; ============================================================================
+; Naming Screen Chinese Pinyin IME (Solution A - Page 3) for Pokemon Epsilon 1.0.3
+; Memory layout inside sNamingScreen ([0x0203AF04], expanded 0x1F30 -> 0x1F80):
+;   +0x1F30..0x1F37: pyBuf[8]    (ASCII 'a'..'z', 0-terminated, max 6)
+;   +0x1F38:        pyLen       (u8, 0..6)
+;   +0x1F39:        candPage    (u8, 0..N-1, 6 cands per page)
+;   +0x1F3A:        activeWinId (u8, cached Win[0] or Win[1] for live redraw)
+;   +0x1F3B:        nameMaxChars(u8, cached for underline bounds)
+;   +0x1F3C..0x1F47: candChars[12] (6 x {hi, lo} 2-byte Chinese ROM codes, 0 = empty)
+;   +0x1F48..0x1F57: nameByteX[16] (per-byte X offset in Name window, 0xFF = 2nd byte)
+;   +0x1F58:        nameEndByte (u8)
+;   +0x1F59:        nameEndX    (u8)
+;   +0x1F5A..0x1F5B: candTotal  (u16 total matching chars for L/R paging)
+; ============================================================================
+
+; 1) Expand sNamingScreen EWRAM alloc size from 0x1F30 -> 0x1F80
+.org {ADDR_ALLOC_SIZE_LITERAL}
+    .dw 0x00001F80
+
+; 2) Keyboard tables for 4-page cycle (matches Win[0]/Win[1] + 0x08921A38 backbuffer):
+;    curPage=2 (vis=0 a..z) -> 0 (vis=2 0..9) -> 3 (vis=1 A..Z) -> 1 (vis=3 PINYIN) -> 2
+.org {TBL_KEYBOARD_CHARS_3}
+    ; sKeyboardChars[3]: non-0xFF marks valid keys on cols 0..8, 0xFF on col 9
+    .db 0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xFF
+    .db 0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xFF
+    .db 0xDE,0xDF,0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xFF
+    .db 0xE7,0xE8,0xE9,0xEA,0xEB,0xEC,0xED,0xEE,0xAE,0xFF
+
+.org {TBL_COL_COUNTS}
+    .db 8, 8, 6, 9, 10   ; colCounts[0..4] -> subpage 3 has 9 cols (0..8)
+
+.org {TBL_COL_X_BASE} + 30
+    .db 0, 16, 32, 48, 64, 80, 96, 112, 128, 0 ; subpage 3 X coordinates (16px grid)
+
+.org {TBL_BUTTON_IDX}
+    .db 0, 2, 1, 3, 0    ; buttonIdx[curPage]: 0->0(UPPER), 1->2(lower), 2->1(others), 3->3(拼音)
+    .db 1, 0, 2, 3, 4    ; BackSubpage[curPage] (0x0891F67C): 0->1(A..Z), 1->0(a..z), 2->2(0..9), 3->3(PINYIN)
+    .db 2, 3, 0, 1, 4    ; VisSubpage[curPage]  (0x0891F69C): 0->2(0..9), 1->3(PINYIN), 2->0(a..z), 3->1(A..Z)
+    .db 2, 3, 0, 1, 4    ; NextCurOnSwap[nxt]:  0->2, 1->3, 2->0, 3->1
+
+; Use BLUE border tilemap (0x098D9264) for curPage=3 (pre-draws PINYIN backbuffer)
+.org {ADDR_BORDER_TILEMAP_3_PTR}
+    .dw {GFX_BLUE_BORDER_TM}
+
+; 2b) Zero-initialize IME extra state (+0x1F30..+0x1F5F) on NamingScreen init
+.org {HOOK_NAMING_ZERO_IME}
+    ldr  r0, [pc, #0]
+    bx   r0
+    .dw (Hook_NamingZeroIME | 1)
+
+; 3) Hook PageSwap button update, expand text subsprites 24x8 -> 32x16, clamp animNum for tag=12 ("拼音")
+.org {ADDR_BTN_SUBSPRITE}
+    .dh -16, -8, 0x1500
+    .dh -16,  0, 0x1504
+
+.org {HOOK_PAGE_SWAP_BTN}
+    ldr  r0, [pc, #0]
+    bx   r0
+    .align 4
+    .dw (Hook_PageSwapButton | 1)
+
+.org {HOOK_BTN_ANIM_CLAMP}
+    ldr  r0, [pc, #0]
+    bx   r0
+    .dw (Hook_BtnAnimClamp | 1)
+
+.org {ADDR_BTN_PALS_POOL}
+    .dw PinyinBtnPals
+    .dw PinyinBtnTags
+
+; 4) Expand NamingScreen SpriteSheets table to include tag=12 ("拼音")
+.org {ADDR_SPRITE_SHEETS_PTR}
+    .dw ExtendedSpriteSheets
+
+; 5) Hook DrawKeyboardPageText (0x089219C0)
+.org {HOOK_DRAW_KBD_PAGE_TEXT}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_DrawKeyboardPageText | 1)
+
+; 6) Hook MainInput R/L handler BEFORE original R check (0x08920F48)
+.org {HOOK_MAIN_KEYS}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_MainKeys | 1)
+
+; 7) Hook AddTextCharacter (0x089214C0)
+.org {HOOK_ADD_TEXT_CHAR}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_AddTextCharacter | 1)
+
+; 8) Hook DeleteTextCharacter (0x08921400)
+.org {HOOK_DELETE_TEXT_CHAR}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_DeleteTextCharacter | 1)
+
+; 9) Hook UpdateNameDisplay (0x08921858)
+.org {HOOK_UPDATE_NAME_DISP}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_UpdateNameDisplay | 1)
+
+; 10) Hook UnderlineSpriteCallback (0x08920144)
+.org {HOOK_UNDERLINE_CB}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_UnderlineCallback | 1)
+
+; 11) Hook MoveCursorToGrid entry (0x08920310): default to (0,1) 'a', clamp Row 0 cands
+.org {HOOK_MOVE_CURSOR_ENTRY}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_MoveCursorEntry | 1)
+
+; 12) Hook MoveCursorToGrid Row Y (0x0892037C): y=87 on Pinyin Row 0 (1px above divider)
+.org {HOOK_CURSOR_ROW_Y}
+    ldr  r0, [pc, #0]
+    bx   r0
+    .dw (Hook_CursorRowY | 1)
+
+; 13) Hook HandleDpadCursor finish (0x08921130): skip empty Row 0 & wrap within cands
+.org {HOOK_DPAD_MOVE_CURSOR}
+    ldr  r3, [pc, #0]
+    bx   r3
+    .dw (Hook_DpadMoveCursor | 1)
+    nop
+
+; ============================================================================
+; Free-space Assets & Pinyin IME Implementation (verified free space 0x09918000..0x0993FFFF)
+; ============================================================================
+.org {FREE_SPACE_IME}
+.align 4
+PinyinDict:
+    .incbin "{ASSET_DIR}/pinyin_dict.bin"
+
+.align 4
+PinyinBtnTiles:
+    .incbin "{ASSET_DIR}/pinyin_btn.bin"
+.align 4
+BtnUpperTiles:
+    .incbin "{ASSET_DIR}/btn_upper.bin"
+.align 4
+BtnLowerTiles:
+    .incbin "{ASSET_DIR}/btn_lower.bin"
+.align 4
+BtnOthersTiles:
+    .incbin "{ASSET_DIR}/btn_others.bin"
+.align 4
+BtnBackTiles:
+    .incbin "{ASSET_DIR}/btn_back.bin"
+.align 4
+BtnOkTiles:
+    .incbin "{ASSET_DIR}/btn_ok.bin"
+.align 4
+BtnBoxTiles:
+    .incbin "{ASSET_DIR}/btn_box.bin"
+.align 4
+BtnPillTiles:
+    .incbin "{ASSET_DIR}/btn_pill.bin"
+
+.align 4
+PinyinBtnPals:
+    .dh 1, 3, 2, 1
+PinyinBtnTags:
+    .dh 4, 6, 5, 12
+
+.align 4
+ExtendedSpriteSheets:
+    .dw BtnBackTiles,   0x000001E0  ; tag 0: 退格 / B BUTTON (11px capsule)
+    .dw BtnOkTiles,     0x000101E0  ; tag 1: 确定 / START> (11px capsule)
+    .dw BtnBoxTiles,    0x00020280  ; tag 2: page swap box (11px cutout)
+    .dw BtnPillTiles,   0x00030100  ; tag 3: page swap pill fill (11px fill)
+    .dw BtnUpperTiles,  0x00040100  ; tag 4: 大写 (32x16)
+    .dw BtnLowerTiles,  0x00050100  ; tag 5: 小写 (32x16)
+    .dw BtnOthersTiles, 0x00060100  ; tag 6: 符号 (32x16)
+    .dw {GFX_TAG7_CUR1},     0x00070080  ; tag 7: cursor 1
+    .dw {GFX_TAG8_CUR2},     0x00080080  ; tag 8: cursor 2
+    .dw {GFX_TAG9_CUR3},     0x00090080  ; tag 9: cursor 3
+    .dw {GFX_TAGA_ARROW},     0x000A0020  ; tag A: arrow
+    .dw {GFX_TAGB_UNDER},     0x000B0020  ; tag B: underscore
+    .dw PinyinBtnTiles
+    .dh 0x0100, 0x000C              ; tag C: 拼音 (32x16)
+    .dw 0, 0
+
+.align 4
+ColorBlueText:
+    .db 0x0D, 0x01, 0x02, 0x00  ; bg=13(blue), fg=1(white), shadow=2(dark grey)
+ColorNameText:
+    .db 0x01, 0x02, 0x03, 0x00  ; Name box color
+StrPinPrompt:
+    .db {BYTES_PINYIN}, 0xFF ; "拼音" (auto-resolved from charmap.json)
+StrDelKey:
+    .db {BYTES_DEL}, 0xFF ; "退" (auto-resolved from charmap.json)
+
+.align 2
+CallR3:
+    bx   r3
+
+.align 2
+CallR12:
+    bx   r12
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_NamingZeroIME (0x0891F2A8): zero-init +0x1F30..+0x1F5F
+; ----------------------------------------------------------------------------
+.align 2
+Hook_NamingZeroIME:
+    push {r4-r6, lr}
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r0, [r4, #0]
+    ldr  r1, =0x00001F30
+    add  r1, r0, r1
+    mov  r2, #0
+    mov  r3, #0
+@@ZeroLoop:
+    str  r2, [r1, r3]
+    add  r3, #4
+    cmp  r3, #0x50
+    blt  @@ZeroLoop
+    ; Replaced instruction @ 0x0891F2AC..0x0891F2B4:
+    mov  r1, #0xF8
+    lsl  r1, r1, #5
+    add  r0, r0, r1
+    mov  r2, #0
+    ldr  r3, ={RET_NAMING_ZERO_IME}
+    bx   r3
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_BtnAnimClamp (0x089207F4): use animNum=0 (24x8 subsprites) for tag=12
+; ----------------------------------------------------------------------------
+.align 2
+Hook_BtnAnimClamp:
+    cmp  r5, #3
+    bne  @@OrigAnim
+    mov  r1, #0
+    b    @@StoreAnim
+@@OrigAnim:
+    and  r1, r5
+@@StoreAnim:
+    ldrb r2, [r6, #0]
+    mov  r0, #64
+    neg  r0, r0
+    and  r0, r2
+    orr  r0, r1
+    strb r0, [r6, #0]
+    pop  {r3}
+    mov  r8, r3
+    pop  {r4, r5, r6}
+    pop  {r0}
+    bx   r0
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_PageSwapButton (0x08920748)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_PageSwapButton:
+    ; Runs mid-swap while curPage still holds OLD page; compute upcomingCur = sNextPage[BackSubpage[curPage]]
+    ldr  r3, ={FN_BACK_SUBPAGE} ; BackSubpage[curPage]
+    bl   CallR3
+    lsl  r0, r0, #24
+    lsr  r0, r0, #24
+    ldr  r1, ={TBL_NEXT_CUR_ON_SWAP}
+    ldrb r0, [r1, r0]    ; upcomingCur
+    ldr  r3, ={FN_BUTTON_IDX} ; buttonIdx[upcomingCur]
+    bl   CallR3
+    lsl  r0, r0, #24
+    lsr  r0, r0, #24
+    mov  r1, r4
+    mov  r2, r5
+    ldr  r3, ={FN_PAGE_SWAP_BTN_DRAW}
+    bl   CallR3
+    ldr  r3, ={RET_PAGE_SWAP_BTN}
+    bx   r3
+    .pool
+
+; ----------------------------------------------------------------------------
+; DrawPinyinSeparator(winId in r0): draws crisp 1px dark line at y=15 in Win
+; ----------------------------------------------------------------------------
+.align 2
+DrawPinyinSeparator:
+    push {r4-r5, lr}
+    lsl  r0, r0, #4
+    ldr  r1, ={RAM_GWINDOWS}
+    add  r0, r0, r1
+    ldrb r4, [r0, #3]    ; width in tiles (19)
+    ldr  r5, [r0, #8]    ; tileData ptr
+    mov  r0, #32
+    mul  r0, r4          ; tile row 1 offset
+    add  r5, r5, r0
+    add  r5, #28         ; bottom pixel line (y_in_tile = 7 -> y = 15)
+    ldr  r1, =0x22222222
+    mov  r2, #0
+@@SepLoop:
+    cmp  r2, r4
+    bge  @@SepDone
+    str  r1, [r5, #0]
+    add  r5, #32
+    add  r2, #1
+    b    @@SepLoop
+@@SepDone:
+    pop  {r4-r5, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; LookupPinyin(): scans PinyinDict prefix matches -> populates IME_CANDS & TOTAL
+; ----------------------------------------------------------------------------
+.align 2
+LookupPinyin:
+    push {r4-r7, lr}
+    sub  sp, #16
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r4, [r4]
+
+    ldr  r0, =0x00001F3C
+    add  r0, r4, r0
+    mov  r1, #0
+    str  r1, [r0, #0]
+    str  r1, [r0, #4]
+    str  r1, [r0, #8]
+    ldr  r0, =0x00001F5A
+    add  r0, r4, r0
+    strh r1, [r0, #0]
+
+    ldr  r0, =0x00001F38
+    add  r0, r4, r0
+    ldrb r5, [r0, #0]    ; pyLen
+    cmp  r5, #0
+    beq  @@DoneEmpty
+
+    ldr  r6, =PinyinDict
+    ldrh r7, [r6, #0]    ; numSyllables
+    mov  r0, r6
+    add  r0, #8
+    str  r0, [sp, #0]    ; entries base
+    str  r7, [sp, #4]    ; numSyllables
+    ldr  r1, =0x00001F30
+    add  r1, r4, r1
+    str  r1, [sp, #8]    ; pyBuf ptr
+
+    ldr  r0, =0x00001F39
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]    ; candPage
+    mov  r1, #6
+    mul  r0, r1
+    str  r0, [sp, #12]   ; startIdx = candPage * 6
+
+    mov  r6, #0          ; totalMatched
+    mov  r7, #0          ; collected (0..6)
+    mov  r2, #0          ; syllable index
+@@LoopSyl:
+    ldr  r0, [sp, #4]
+    cmp  r2, r0
+    bge  @@FinishScan
+    mov  r0, #12
+    mul  r0, r2
+    ldr  r1, [sp, #0]
+    add  r3, r1, r0      ; &entries[r2]
+    ldr  r1, [sp, #8]    ; pyBuf
+    mov  r0, #0
+@@CmpLoop:
+    cmp  r0, r5
+    bge  @@PrefixMatch
+    push {r2, r3}
+    ldrb r2, [r3, r0]
+    ldrb r3, [r1, r0]
+    cmp  r2, r3
+    pop  {r2, r3}
+    bne  @@NoMatch
+    add  r0, #1
+    b    @@CmpLoop
+@@NoMatch:
+    cmp  r6, #0
+    bne  @@FinishScan
+    add  r2, #1
+    b    @@LoopSyl
+
+@@PrefixMatch:
+    ldrh r0, [r3, #10]   ; charCount
+    ldrh r1, [r3, #8]    ; charStart
+    push {r2}
+    mov  r2, #0
+@@CharLoop:
+    cmp  r2, r0
+    bge  @@CharLoopEnd
+    ldr  r3, [sp, #16]   ; startIdx (12 + 4 bytes pushed r2)
+    cmp  r6, r3
+    blt  @@NextChar
+    cmp  r7, #6
+    bge  @@NextChar
+    push {r0-r2}
+    add  r1, r1, r2
+    lsl  r1, r1, #1
+    ldr  r0, =PinyinDict
+    ldrh r2, [r0, #0]
+    mov  r3, #12
+    mul  r2, r3
+    add  r0, #8
+    add  r0, r0, r2      ; charPool base
+    add  r0, r0, r1
+    ldrb r1, [r0, #0]
+    ldrb r2, [r0, #1]
+    ldr  r3, =0x00001F3C
+    add  r3, r4, r3
+    lsl  r0, r7, #1
+    add  r3, r3, r0
+    strb r1, [r3, #0]
+    strb r2, [r3, #1]
+    add  r7, #1
+    pop  {r0-r2}
+@@NextChar:
+    add  r6, #1
+    add  r2, #1
+    b    @@CharLoop
+@@CharLoopEnd:
+    pop  {r2}
+    add  r2, #1
+    b    @@LoopSyl
+
+@@FinishScan:
+    ldr  r0, =0x00001F5A
+    add  r0, r4, r0
+    strh r6, [r0, #0]
+@@DoneEmpty:
+    add  sp, #16
+    pop  {r4-r7, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; DrawPinyinPage(winId in r0): renders Row 0 candidate bar + Rows 1..3 keys
+; ----------------------------------------------------------------------------
+.align 2
+DrawPinyinPage:
+    push {r4-r7, lr}
+    sub  sp, #24
+    mov  r4, r0          ; r4 = winId
+    ldr  r5, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r5, [r5]
+    ldr  r1, =0x00001F3A
+    add  r1, r5, r1
+    strb r4, [r1, #0]    ; save activeWinId
+
+    ; Fill background 0xDD (blue)
+    mov  r0, r4
+    mov  r1, #0xDD
+    ldr  r3, ={FN_FILL_WINDOW_PIXEL_BUF}
+    bl   CallR3
+
+    ; Refresh Pinyin candidate buffer
+    bl   LookupPinyin
+
+    ; Print pyBuf (or "拼音" prompt when empty) at x=4, y=1
+    ldr  r0, =0x00001F38
+    add  r0, r5, r0
+    ldrb r0, [r0, #0]
+    cmp  r0, #0
+    bne  @@HasPyInput
+    ldr  r0, =StrPinPrompt
+    b    @@DoPrintPy
+@@HasPyInput:
+    ldr  r1, =0x00001F30
+    add  r1, r5, r1
+    add  r2, sp, #12
+    mov  r3, #0
+@@ConvPy:
+    ldrb r6, [r1, r3]
+    cmp  r6, #0
+    beq  @@ConvPyDone
+    add  r6, #0x74       ; 'a'(0x61) + 0x74 = 0xD5
+    strb r6, [r2, r3]
+    add  r3, #1
+    cmp  r3, #6
+    blt  @@ConvPy
+@@ConvPyDone:
+    mov  r6, #0xF0       ; ':'
+    strb r6, [r2, r3]
+    add  r3, #1
+    mov  r6, #0xFF
+    strb r6, [r2, r3]
+    mov  r0, r2
+@@DoPrintPy:
+    ldr  r1, =ColorBlueText
+    str  r1, [sp, #0]
+    mov  r1, #0xFF
+    str  r1, [sp, #4]
+    str  r0, [sp, #8]
+    mov  r0, r4
+    mov  r1, #1
+    mov  r2, #4
+    mov  r3, #1
+    ldr  r6, ={FN_ADD_TEXT_PRINTER_PARAM3}
+    mov  r12, r6
+    bl   CallR12
+
+    ; Print up to 6 candidates on Row 0: cols 3..8 -> x = 56, 72, 88, 104, 120, 136
+    mov  r6, #0
+@@CandDrawLoop:
+    cmp  r6, #6
+    bge  @@DrawKeysGrid
+    ldr  r0, =0x00001F3C
+    add  r0, r5, r0
+    lsl  r1, r6, #1
+    add  r0, r0, r1
+    ldrb r1, [r0, #0]
+    ldrb r2, [r0, #1]
+    cmp  r1, #0
+    beq  @@DrawKeysGrid  ; remaining slots empty
+    add  r3, sp, #12
+    strb r1, [r3, #0]
+    strb r2, [r3, #1]
+    mov  r0, #0xFF
+    strb r0, [r3, #2]
+
+    ldr  r0, =ColorBlueText
+    str  r0, [sp, #0]
+    mov  r0, #0xFF
+    str  r0, [sp, #4]
+    str  r3, [sp, #8]
+    mov  r0, r4
+    mov  r1, #1
+    lsl  r2, r6, #4
+    add  r2, #56         ; x = 56 + i*16
+    mov  r3, #1
+    ldr  r7, ={FN_ADD_TEXT_PRINTER_PARAM3}
+    mov  r12, r7
+    bl   CallR12
+    add  r6, #1
+    b    @@CandDrawLoop
+
+@@DrawKeysGrid:
+    ; Print Rows 1..3 (r6 = 0..26)
+    mov  r6, #0
+@@KeyLoop:
+    cmp  r6, #27
+    bge  @@FlushWin
+    ; row = key / 9, col = key % 9
+    mov  r0, r6
+    mov  r1, #9
+    ldr  r3, ={FN_UDIVSI3}
+    bl   CallR3          ; r0 = row (0..2)
+    mov  r7, r0          ; r7 = row
+    mov  r1, #9
+    mul  r1, r7
+    sub  r2, r6, r1      ; r2 = col (0..8)
+    cmp  r6, #26
+    beq  @@IsDelKey
+    mov  r1, #0xD5
+    add  r1, r1, r6      ; 'a'..'z'
+    add  r3, sp, #12
+    strb r1, [r3, #0]
+    mov  r0, #0xFF
+    strb r0, [r3, #1]
+    lsl  r2, r2, #4
+    add  r2, #11         ; x = 11 + col*16 (centered 6px letter)
+    b    @@DoPrintKey
+@@IsDelKey:
+    ldr  r3, =StrDelKey  ; "退"
+    lsl  r2, r2, #4
+    add  r2, #8          ; x = 8 + col*16 (centered 12px Hanzi)
+@@DoPrintKey:
+    ldr  r0, =ColorBlueText
+    str  r0, [sp, #0]
+    mov  r0, #0xFF
+    str  r0, [sp, #4]
+    str  r3, [sp, #8]
+    mov  r0, r4
+    mov  r1, #1
+    add  r7, #1          ; grid row 1..3
+    lsl  r3, r7, #4
+    add  r3, #1          ; y = 17, 33, 49
+    ldr  r7, ={FN_ADD_TEXT_PRINTER_PARAM3}
+    mov  r12, r7
+    bl   CallR12
+    add  r6, #1
+    b    @@KeyLoop
+
+@@FlushWin:
+    ; Draw crisp 1px separator at y=15 after Row 0 text so font cell padding never clips it
+    mov  r0, r4
+    bl   DrawPinyinSeparator
+    mov  r0, r4
+    mov  r1, #2
+    ldr  r3, ={FN_COPY_WINDOW_TO_VRAM} ; CopyWindowToVram(winId, COPYWIN_GFX=2)
+    bl   CallR3
+    mov  r0, r4
+    ldr  r3, ={FN_PUT_WINDOW_TILEMAP} ; PutWindowTilemap(winId)
+    bl   CallR3
+    bl   ClampPinyinCursorIfCreated
+
+    add  sp, #24
+    pop  {r4-r7, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; CountVisibleCands(): returns r0 = 0..6 (clobbers r0-r3 only, leaf function)
+; ----------------------------------------------------------------------------
+.align 2
+CountVisibleCands:
+    ldr  r1, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r1, [r1]
+    ldr  r2, =0x00001F3C
+    add  r1, r1, r2
+    mov  r0, #0
+@@CntCandLoop:
+    cmp  r0, #6
+    bge  @@CntCandDone
+    lsl  r2, r0, #1
+    ldrb r3, [r1, r2]
+    cmp  r3, #0
+    beq  @@CntCandDone
+    add  r0, #1
+    b    @@CntCandLoop
+@@CntCandDone:
+    bx   lr
+    .pool
+
+; ----------------------------------------------------------------------------
+; ClampPinyinCursorIfCreated(): snaps cursor off empty Row 0 / invalid cols
+; ----------------------------------------------------------------------------
+.align 2
+ClampPinyinCursorIfCreated:
+    push {r4-r5, lr}
+    sub  sp, #8
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r4, [r4]
+    ldr  r0, =0x00001F5C
+    ldrb r0, [r4, r0]
+    cmp  r0, #0
+    beq  @@ClampDone     ; cursor not yet created during NamingScreen init
+    ldr  r3, ={FN_VIS_SUBPAGE} ; VisSubpage
+    bl   CallR3
+    cmp  r0, #3
+    bne  @@ClampDone
+
+    mov  r0, sp
+    mov  r1, sp
+    add  r1, #2
+    ldr  r3, ={FN_GET_CURSOR_POS} ; GetCursorPos(&col, &row)
+    bl   CallR3
+    mov  r2, sp
+    mov  r3, #0
+    ldsh r4, [r2, r3]    ; r4 = col
+    mov  r3, #2
+    ldsh r5, [r2, r3]    ; r5 = row
+    cmp  r5, #0
+    bne  @@ClampDone
+
+    bl   CountVisibleCands ; r0 = nCand (0..6)
+    cmp  r0, #0
+    bne  @@CheckCandBounds
+    ; No candidates left -> jump cleanly to (0, 1) 'a'
+    mov  r0, #0
+    mov  r1, #1
+    ldr  r3, ={FN_MOVE_CURSOR_TO_GRID}
+    bl   CallR3
+    b    @@ClampDone
+
+@@CheckCandBounds:
+    cmp  r4, #3
+    blt  @@SnapCand3
+    add  r0, #2          ; 2 + nCand
+    cmp  r4, r0
+    ble  @@ClampDone
+    mov  r1, #0
+    ldr  r3, ={FN_MOVE_CURSOR_TO_GRID} ; col = 2 + nCand, row = 0
+    bl   CallR3
+    b    @@ClampDone
+@@SnapCand3:
+    mov  r0, #3
+    mov  r1, #0
+    ldr  r3, ={FN_MOVE_CURSOR_TO_GRID}
+    bl   CallR3
+
+@@ClampDone:
+    add  sp, #8
+    pop  {r4-r5, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_MoveCursorEntry (0x08920310): clamp Row 0 on Pinyin & mark cursorReady
+; ----------------------------------------------------------------------------
+.align 2
+Hook_MoveCursorEntry:
+    push {r0, r1, r4, lr}
+    ldr  r1, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r1, [r1]
+    ldr  r2, =0x00001F5C
+    mov  r0, #1
+    strb r0, [r1, r2]    ; cursorReady = 1
+    ldr  r3, ={FN_VIS_SUBPAGE} ; VisSubpage
+    bl   CallR3
+    cmp  r0, #3
+    bne  @@EntryOrig
+    ldr  r0, [sp, #4]
+    lsl  r0, r0, #16
+    asr  r0, r0, #16     ; s16 row
+    cmp  r0, #0
+    bne  @@EntryOrig
+    bl   CountVisibleCands
+    cmp  r0, #0
+    bne  @@EntryClampCol
+    mov  r0, #1
+    str  r0, [sp, #4]    ; force row = 1 ('a'..'i')
+    b    @@EntryOrig
+@@EntryClampCol:
+    mov  r4, r0          ; nCand
+    ldr  r0, [sp, #0]
+    lsl  r0, r0, #16
+    asr  r0, r0, #16     ; s16 col
+    cmp  r0, #3
+    bge  @@EntryUpperCol
+    mov  r0, #3
+    str  r0, [sp, #0]
+    b    @@EntryOrig
+@@EntryUpperCol:
+    add  r4, #2
+    cmp  r0, r4
+    ble  @@EntryOrig
+    str  r4, [sp, #0]
+@@EntryOrig:
+    pop  {r0, r1, r4}
+    pop  {r3}
+    mov  lr, r3
+    push {r4-r7, lr}
+    mov  r7, r8
+    push {r7}
+    lsl  r0, r0, #16
+    ldr  r3, ={RET_MOVE_CURSOR_ENTRY}
+    bx   r3
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_CursorRowY (0x0892037C): Pinyin Row 0 cursor at y=87 (above divider)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_CursorRowY:
+    cmp  r7, #0
+    bne  @@NormalRowY
+    push {r1-r3}
+    mov  r2, lr
+    push {r2}
+    ldr  r3, ={FN_VIS_SUBPAGE}
+    bl   CallR3
+    pop  {r2}
+    mov  lr, r2
+    pop  {r1-r3}
+    cmp  r0, #3
+    bne  @@NormalRowY
+    mov  r0, #0x57       ; 87px
+    b    @@StoreRowY
+@@NormalRowY:
+    lsl  r0, r7, #16
+    asr  r0, r0, #12
+    add  r0, #0x58
+@@StoreRowY:
+    strh r0, [r5, #0x22]
+    ldr  r0, ={RET_CURSOR_ROW_Y}
+    bx   r0
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_DpadMoveCursor (0x08921130): skip Row 0 if nCand==0, wrap inside cands
+; ----------------------------------------------------------------------------
+.align 2
+Hook_DpadMoveCursor:
+    ldr  r3, ={FN_VIS_SUBPAGE} ; VisSubpage
+    bl   CallR3
+    cmp  r0, #3
+    bne  @@DpadCallOrig
+
+    mov  r2, #0
+    ldrsh r1, [r5, r2]   ; newRow
+    cmp  r1, #0
+    bne  @@DpadCallOrig
+
+    ; Fetch old cursor row directly from sprite state (r6 = &newCol, r5 = &newRow)
+    sub  sp, #8
+    mov  r0, sp
+    mov  r1, sp
+    add  r1, #2
+    ldr  r3, ={FN_GET_CURSOR_POS}
+    bl   CallR3
+    mov  r2, sp
+    mov  r3, #2
+    ldsh r4, [r2, r3]    ; r4 = oldRow
+    add  sp, #8
+
+    bl   CountVisibleCands ; r0 = nCand (0..6)
+    cmp  r0, #0
+    bne  @@DpadHasCands
+
+    ; No candidates: UP from Row 1 wraps to Row 3; DOWN from Row 3 wraps to Row 1
+    cmp  r4, #1
+    bne  @@WrapToRow1
+    mov  r1, #3
+    b    @@StoreDpadRow
+@@WrapToRow1:
+    mov  r1, #1
+@@StoreDpadRow:
+    strh r1, [r5, #0]
+    b    @@DpadCallOrig
+
+@@DpadHasCands:
+    mov  r3, r0          ; nCand
+    mov  r2, #0
+    ldrsh r0, [r6, r2]   ; newCol
+    cmp  r4, #0          ; oldRow == 0?
+    bne  @@DpadFromKeyRow
+
+    ; Horizontal wrap inside candidate cols [3 .. 2 + nCand]
+    cmp  r0, #2
+    bne  @@CheckRightWrap
+    add  r0, r3, #2      ; wrap left from col 3 -> 2 + nCand
+    b    @@StoreDpadCol
+@@CheckRightWrap:
+    cmp  r0, #3
+    blt  @@WrapCandStart
+    add  r1, r3, #2
+    cmp  r0, r1
+    ble  @@DpadCallOrig
+@@WrapCandStart:
+    mov  r0, #3
+    b    @@StoreDpadCol
+
+@@DpadFromKeyRow:
+    cmp  r0, #3
+    bge  @@CheckCandUpper
+    mov  r0, #3
+    b    @@StoreDpadCol
+@@CheckCandUpper:
+    add  r1, r3, #2
+    cmp  r0, r1
+    ble  @@DpadCallOrig
+    mov  r0, r1
+@@StoreDpadCol:
+    strh r0, [r6, #0]
+
+@@DpadCallOrig:
+    mov  r2, #0
+    ldrsh r0, [r6, r2]
+    ldrsh r1, [r5, r2]
+    ldr  r3, ={FN_MOVE_CURSOR_TO_GRID}
+    bl   CallR3
+    ldr  r3, ={RET_DPAD_MOVE_CURSOR}
+    bx   r3
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_DrawKeyboardPageText(winId in r0, subpage in r1)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_DrawKeyboardPageText:
+    cmp  r1, #3
+    bne  @@OrigDrawKbd
+    b    DrawPinyinPage
+@@OrigDrawKbd:
+    push {r4-r7, lr}
+    mov  r7, r8
+    push {r7}
+    sub  sp, #12
+    ldr  r3, ={RET_DRAW_KBD_PAGE_TEXT}
+    bx   r3
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_MainKeys (0x08920F48): intercept R/L when visible subpage == 3 (PINYIN)
+; Live registers on entry: r1 = gMain.newKeys, r2 = taskPtr, r4 = gMain
+; ----------------------------------------------------------------------------
+.align 2
+Hook_MainKeys:
+    push {r1, r2}
+    ldr  r3, ={FN_VIS_SUBPAGE} ; visible subpage (0x08FFA0ED[curPage])
+    bl   CallR3
+    pop  {r1, r2}
+    cmp  r0, #3
+    bne  @@NotPinyinMain
+
+    ; Only intercept L/R for candidate paging when Pinyin buffer is non-empty;
+    ; when pyLen == 0, let R switch keyboard page like standard NamingScreen.
+    ldr  r3, =0x00001F38
+    ldr  r0, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r0, [r0]
+    ldrb r0, [r0, r3]
+    cmp  r0, #0
+    beq  @@NotPinyinMain
+
+    ldr  r3, =0x00000100 ; R_BUTTON -> next candidate page
+    tst  r1, r3
+    bne  @@DoPageNext
+    ldr  r3, =0x00000200 ; L_BUTTON -> prev candidate page
+    tst  r1, r3
+    bne  @@DoPagePrev
+    b    @@NotPinyinMain
+
+@@DoPageNext:
+    mov  r0, #1
+    b    @@ApplyPageDelta
+@@DoPagePrev:
+    mov  r0, #1
+    neg  r0, r0
+@@ApplyPageDelta:
+    push {r2, r4}
+    bl   PinyinStepPage
+    pop  {r2, r4}
+    mov  r0, #0
+    strh r0, [r2, #0xA]  ; return idle
+    ldr  r3, ={RET_MAIN_KEYS_IDLE}
+    bx   r3
+
+@@NotPinyinMain:
+    mov  r0, #0x80
+    lsl  r0, r0, #1      ; 0x100 (original R_BUTTON check @ 0x08920F48)
+    and  r0, r1
+    cmp  r0, #0
+    beq  @@NoRKey
+    mov  r0, #8
+    strh r0, [r2, #0xA]
+    ldr  r3, ={RET_MAIN_KEYS_IDLE}
+    bx   r3
+@@NoRKey:
+    ldr  r3, ={RET_MAIN_KEYS_NO_R}
+    bx   r3
+    .pool
+
+.align 2
+PinyinStepPage:
+    push {r4-r5, lr}
+    mov  r4, r0          ; delta (+1 or -1)
+    ldr  r5, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r5, [r5]
+    ldr  r0, =0x00001F5A
+    add  r0, r5, r0
+    ldrh r2, [r0, #0]    ; totalMatches
+    cmp  r2, #6
+    ble  @@StepBeepOnly
+    ldr  r0, =0x00001F39
+    add  r0, r5, r0
+    ldrb r1, [r0, #0]    ; cur candPage
+    cmp  r4, #0
+    blt  @@StepBack
+    ; Forward
+    add  r1, #1
+    mov  r3, #6
+    mul  r3, r1
+    cmp  r3, r2
+    blt  @@StoreNewPage
+    mov  r1, #0          ; wrap to 0
+    b    @@StoreNewPage
+@@StepBack:
+    cmp  r1, #0
+    bgt  @@DecPage
+    ; Wrap to last page = (total - 1) / 6
+    sub  r0, r2, #1
+    mov  r1, #6
+    ldr  r3, ={FN_UDIVSI3}
+    bl   CallR3
+    mov  r1, r0
+    b    @@StoreNewPage
+@@DecPage:
+    sub  r1, #1
+@@StoreNewPage:
+    ldr  r0, =0x00001F39
+    add  r0, r5, r0
+    strb r1, [r0, #0]
+    ldr  r0, =0x00001F3A
+    add  r0, r5, r0
+    ldrb r0, [r0, #0]    ; activeWinId
+    bl   DrawPinyinPage
+    mov  r0, #5          ; SE_SELECT
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    pop  {r4-r5, pc}
+@@StepBeepOnly:
+    mov  r0, #0x16       ; SE_BOO
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    pop  {r4-r5, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_AddTextCharacter (0x089214C0)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_AddTextCharacter:
+    push {r4-r7, lr}
+    sub  sp, #8
+    ldr  r3, ={FN_VIS_SUBPAGE} ; visible subpage (0x08FFA0ED[curPage])
+    bl   CallR3
+    cmp  r0, #3
+    beq  @@InPinyinAdd
+    ; Original non-pinyin path: pop our frame and execute replaced instructions
+    add  sp, #8
+    pop  {r4-r7}
+    pop  {r3}
+    mov  lr, r3
+    push {r4, r5, lr}
+    sub  sp, #4
+    ldr  r5, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r0, [r5]
+    ldr  r1, =0x00001F01
+    ldr  r3, ={RET_ADD_TEXT_CHAR_ORIG}
+    bx   r3
+
+@@InPinyinAdd:
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r4, [r4]
+    ldr  r1, =0x00001F01
+    add  r0, r4, r1
+    mov  r1, #0
+    strb r1, [r0, #0]
+
+    mov  r0, sp          ; &col
+    mov  r1, sp
+    add  r1, #2          ; &row
+    ldr  r3, ={FN_GET_CURSOR_POS} ; GetCursorPos(&col, &row)
+    bl   CallR3
+    mov  r0, sp
+    mov  r1, #0
+    ldsh r5, [r0, r1]    ; r5 = col
+    mov  r1, #2
+    ldsh r6, [r0, r1]    ; r6 = row
+    cmp  r6, #0
+    bne  @@PressedKeyRow
+
+    ; Row 0 pressed: col 0..2 clears Pinyin, col 3..8 picks candidate
+    cmp  r5, #3
+    blt  @@ClearPyOnly
+    sub  r0, r5, #3      ; slot 0..5
+    lsl  r0, r0, #1
+    ldr  r1, =0x00001F3C
+    add  r1, r4, r1
+    add  r1, r1, r0
+    ldrb r6, [r1, #0]    ; hi
+    ldrb r7, [r1, #1]    ; lo
+    cmp  r6, #0
+    bne  @@HaveCand
+    b    @@BuzzFail
+@@HaveCand:
+
+    ; Append 2-byte Chinese char (r6=hi, r7=lo) into textBuffer
+    ldr  r3, ={FN_GET_TEXT_POS} ; GetTextPos()
+    bl   CallR3
+    lsl  r0, r0, #24
+    lsr  r5, r0, #24     ; r5 = curPos
+    ldr  r1, =0x00001F18
+    add  r0, r4, r1
+    ldr  r0, [r0, #0]    ; template ptr
+    ldrb r2, [r0, #1]    ; maxChars
+    add  r0, r5, #2
+    cmp  r0, r2
+    ble  @@LenFits
+    b    @@BuzzFail
+@@LenFits:
+
+    ; Store textBuffer[pos] = hi, [pos+1] = lo, and [pos+2] = 0xFF if < maxChars
+    ldr  r3, =0x00001800
+    add  r3, r4, r3
+    add  r3, r3, r5
+    strb r6, [r3, #0]
+    strb r7, [r3, #1]
+    cmp  r0, r2
+    bge  @@SkipTerm
+    mov  r1, #0xFF
+    strb r1, [r3, #2]
+@@SkipTerm:
+    ; If templateId == 6, update cursor offset +2 (clamped < maxChars)
+    ldr  r1, =0x00001F1C
+    add  r1, r4, r1
+    ldrb r1, [r1, #0]
+    cmp  r1, #6
+    bne  @@ResetAfterInsert
+    add  r0, r5, #2
+    cmp  r0, r2
+    blt  @@SaveCurPos
+    sub  r0, r2, #1
+@@SaveCurPos:
+    ldr  r1, =0x00001F1E
+    add  r1, r4, r1
+    strh r0, [r1, #0]
+
+@@ResetAfterInsert:
+    ; Clear pyBuf & candPage
+    mov  r0, #0
+    ldr  r1, =0x00001F38
+    add  r1, r4, r1
+    strb r0, [r1, #0]    ; pyLen = 0
+    strb r0, [r1, #1]    ; candPage = 0
+    ldr  r1, =0x00001F30
+    add  r1, r4, r1
+    str  r0, [r1, #0]
+    str  r0, [r1, #4]
+
+    ldr  r3, ={FN_UPDATE_NAME_DISP} ; UpdateNameDisplay()
+    bl   CallR3
+    mov  r0, #3
+    ldr  r3, ={FN_COPY_BG_TILEMAP_BUF} ; CopyBgTilemapBufferToVram(3)
+    bl   CallR3
+    ldr  r0, =0x00001F3A
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    bl   DrawPinyinPage
+    mov  r0, #5          ; SE_SELECT
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+
+    ; Jump to OK only if buffer has 0 bytes left (maxChars reached)
+    ldr  r3, ={FN_GET_TEXT_POS}
+    bl   CallR3
+    lsl  r0, r0, #24
+    lsr  r0, r0, #24
+    ldr  r1, =0x00001F18
+    add  r1, r4, r1
+    ldr  r1, [r1, #0]
+    ldrb r1, [r1, #1]
+    add  r2, r0, #1
+    cmp  r2, r1
+    bge  @@BufFullJumpOK
+    mov  r0, #0
+    b    @@AddDone
+@@BufFullJumpOK:
+    ; If template[maxChars-1] != 0xFF return 1, else 0 (1 byte free left? Wait check textBuffer[r0]!)
+    ldr  r3, =0x00001800
+    add  r3, r4, r3
+    add  r3, r3, r0
+    ldrb r0, [r3, #0]
+    cmp  r0, #0xFF
+    beq  @@ReturnNotFull
+    mov  r0, #1
+    b    @@AddDone
+@@ReturnNotFull:
+    mov  r0, #0
+    b    @@AddDone
+
+@@ClearPyOnly:
+    ldr  r0, =0x00001F38
+    add  r0, r4, r0
+    ldrb r1, [r0, #0]
+    cmp  r1, #0
+    beq  @@BuzzFail
+    mov  r1, #0
+    strb r1, [r0, #0]
+    strb r1, [r0, #1]
+    ldr  r0, =0x00001F30
+    add  r0, r4, r0
+    str  r1, [r0, #0]
+    ldr  r0, =0x00001F3A
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    bl   DrawPinyinPage
+    mov  r0, #0x17
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    mov  r0, #0
+    b    @@AddDone
+
+@@PressedKeyRow:
+    ; keyIdx = (row - 1)*9 + col
+    sub  r0, r6, #1
+    mov  r1, #9
+    mul  r0, r1
+    add  r0, r0, r5      ; 0..26
+    cmp  r0, #26
+    beq  @@KeyBackspace
+    mov  r6, #0x61
+    add  r6, r6, r0      ; ASCII 'a' + keyIdx
+    ldr  r0, =0x00001F38
+    add  r0, r4, r0
+    ldrb r1, [r0, #0]
+    cmp  r1, #6
+    bge  @@BuzzFail
+    ldr  r2, =0x00001F30
+    add  r2, r4, r2
+    strb r6, [r2, r1]
+    add  r1, #1
+    mov  r3, #0
+    strb r3, [r2, r1]    ; null-terminate
+    strb r1, [r0, #0]    ; pyLen++
+    strb r3, [r0, #1]    ; candPage = 0
+    ldr  r0, =0x00001F3A
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    bl   DrawPinyinPage
+    mov  r0, #5
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    mov  r0, #0
+    b    @@AddDone
+
+@@KeyBackspace:
+    bl   DoChineseDelete
+    mov  r0, #0
+    b    @@AddDone
+
+@@BuzzFail:
+    mov  r0, #0x16
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    mov  r0, #0
+
+@@AddDone:
+    add  sp, #8
+    pop  {r4-r7, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_DeleteTextCharacter / DoChineseDelete (0x08921400)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_DeleteTextCharacter:
+    b    DoChineseDelete
+
+.align 2
+DoChineseDelete:
+    push {r4-r7, lr}
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r4, [r4]
+    ldr  r0, =0x00001F01
+    add  r0, r4, r0
+    mov  r1, #0
+    strb r1, [r0, #0]
+
+    ; If on Pinyin page and pyLen > 0, pop 1 letter from pyBuf instead of textBuffer
+    ldr  r3, ={FN_VIS_SUBPAGE} ; visible subpage (0x08FFA0ED[curPage])
+    bl   CallR3
+    cmp  r0, #3
+    bne  @@DelFromName
+    ldr  r0, =0x00001F38
+    add  r0, r4, r0
+    ldrb r1, [r0, #0]
+    cmp  r1, #0
+    beq  @@DelFromName
+    sub  r1, #1
+    strb r1, [r0, #0]
+    mov  r2, #0
+    strb r2, [r0, #1]    ; candPage = 0
+    ldr  r0, =0x00001F30
+    add  r0, r4, r0
+    strb r2, [r0, r1]
+    ldr  r0, =0x00001F3A
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    bl   DrawPinyinPage
+    mov  r0, #0x17
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    pop  {r4-r7, pc}
+
+@@DelFromName:
+    ; Scan textBuffer[0..maxChars-1] to find start offset & byte len of last char before 0xFF
+    ldr  r5, =0x00001800
+    add  r5, r4, r5      ; textBuffer base
+    ldr  r0, =0x00001F18
+    add  r0, r4, r0
+    ldr  r0, [r0, #0]
+    ldrb r6, [r0, #1]    ; maxChars
+    mov  r1, #0          ; curIdx
+    mov  r2, #0          ; prevStart
+    mov  r3, #0          ; prevLen (0 = empty)
+@@ScanLoop:
+    cmp  r1, r6
+    bge  @@ScanDone
+    ldrb r0, [r5, r1]
+    cmp  r0, #0xFF
+    beq  @@ScanDone
+    cmp  r0, #0
+    beq  @@ScanDone
+    mov  r2, r1
+    cmp  r0, #0x87
+    blt  @@Scan1B
+    cmp  r0, #0x9F
+    bgt  @@Scan1B
+    add  r7, r1, #1
+    cmp  r7, r6
+    bge  @@Scan1B
+    mov  r3, #2
+    add  r1, #2
+    b    @@ScanLoop
+@@Scan1B:
+    mov  r3, #1
+    add  r1, #1
+    b    @@ScanLoop
+
+@@ScanDone:
+    cmp  r3, #0
+    beq  @@EmptyNameDel
+    mov  r0, #0xFF
+    strb r0, [r5, r2]
+    cmp  r3, #2
+    bne  @@SingleCleared
+    add  r7, r2, #1
+    strb r0, [r5, r7]
+@@SingleCleared:
+    ; Update 0x1F1E if used
+    ldr  r0, =0x00001F1E
+    add  r0, r4, r0
+    strh r2, [r0, #0]
+
+    ldr  r3, ={FN_UPDATE_NAME_DISP} ; UpdateNameDisplay()
+    bl   CallR3
+    mov  r0, #3
+    ldr  r3, ={FN_COPY_BG_TILEMAP_BUF}
+    bl   CallR3
+@@EmptyNameDel:
+    ldr  r3, ={FN_GET_KEY_ROLE} ; GetKeyRole()
+    bl   CallR3
+    lsl  r0, r0, #24
+    lsr  r0, r0, #24
+    cmp  r0, #0
+    beq  @@ResetCursorAnim
+    cmp  r0, #2
+    bne  @@PlayDelSE
+@@ResetCursorAnim:
+    mov  r0, #1
+    mov  r1, #0
+    mov  r2, #1
+    ldr  r3, ={FN_RESET_CURSOR_ANIM}
+    bl   CallR3
+@@PlayDelSE:
+    mov  r0, #0x17
+    ldr  r3, ={FN_PLAY_SE}
+    bl   CallR3
+    pop  {r4-r7, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_UpdateNameDisplay (0x08921858)
+; Supports both 2-byte Chinese glyphs (advance +12px) and 1-byte chars (+8px)
+; ----------------------------------------------------------------------------
+.align 2
+Hook_UpdateNameDisplay:
+    push {r4-r7, lr}
+    mov  r7, r10
+    mov  r6, r9
+    mov  r5, r8
+    push {r5-r7}
+    sub  sp, #16
+
+    ldr  r4, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r4, [r4]
+    ldr  r0, =0x00001F1C
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    cmp  r0, #6
+    bne  @@CustomNameDraw
+    ; Preserve original templateId==6 behavior completely
+    ldr  r1, ={ADDR_T6_STR}
+    add  r0, sp, #12
+    mov  r2, #2
+    ldr  r3, ={FN_MEMCPY}
+    bl   CallR3
+    ldr  r0, =0x00001F18
+    add  r0, r4, r0
+    ldr  r0, [r0, #0]
+    ldrb r7, [r0, #1]
+    ldr  r0, =0x00001F08
+    add  r0, r4, r0
+    ldrh r0, [r0, #0]
+    sub  r0, #64
+    cmp  r0, #0
+    bge  @@T6PosOk
+    mov  r0, #0
+@@T6PosOk:
+    mov  r8, r0
+    ldr  r0, =0x00001F04
+    add  r0, r4, r0
+    ldrb r0, [r0, #0]
+    mov  r1, #0x11
+    ldr  r3, ={FN_FILL_WINDOW_PIXEL_BUF}
+    bl   CallR3
+    mov  r6, #0
+    ldr  r3, ={RET_UPDATE_NAME_DISP_T6}
+    bx   r3
+
+@@CustomNameDraw:
+    ldr  r0, =0x00001F08
+    add  r0, r4, r0
+    ldrh r0, [r0, #0]
+    sub  r0, #64
+    cmp  r0, #0
+    bge  @@BaseXOk
+    mov  r0, #0
+@@BaseXOk:
+    mov  r8, r0          ; r8 = curX inside Win[2]
+
+    ldr  r0, =0x00001F04
+    add  r0, r4, r0
+    ldrb r5, [r0, #0]    ; r5 = name winId
+    mov  r0, r5
+    mov  r1, #0x11
+    ldr  r3, ={FN_FILL_WINDOW_PIXEL_BUF} ; FillWindowPixelBuffer(winId, 0x11)
+    bl   CallR3
+
+    ldr  r0, =0x00001F18
+    add  r0, r4, r0
+    ldr  r0, [r0, #0]
+    ldrb r7, [r0, #1]    ; r7 = maxChars
+    ldr  r1, =0x00001F3B
+    add  r1, r4, r1
+    strb r7, [r1, #0]    ; cache maxChars
+
+    ldr  r0, =0x00001F48
+    add  r0, r4, r0
+    mov  r9, r0          ; r9 = nameByteX[16]
+    ldr  r0, =0x00001800
+    add  r0, r4, r0
+    mov  r10, r0         ; r10 = textBuffer
+
+    mov  r6, #0          ; byteIdx
+@@DrawCharLoop:
+    cmp  r6, r7
+    bge  @@DrawCharDone
+    mov  r1, r10
+    ldrb r0, [r1, r6]
+    cmp  r0, #0xFF
+    beq  @@DrawCharDone
+    cmp  r0, #0
+    beq  @@DrawCharDone
+
+    mov  r2, r8          ; curX
+    mov  r3, r9
+    strb r2, [r3, r6]
+
+    ; Check 2-byte Chinese (0x87..0x9F)
+    cmp  r0, #0x87
+    blt  @@SingleByteChar
+    cmp  r0, #0x9F
+    bgt  @@SingleByteChar
+    add  r2, r6, #1
+    cmp  r2, r7
+    bge  @@SingleByteChar
+
+    ldrb r1, [r1, r2]    ; lo byte
+    add  r3, sp, #12
+    strb r0, [r3, #0]
+    strb r1, [r3, #1]
+    mov  r0, #0xFF
+    strb r0, [r3, #2]
+
+    mov  r1, r9
+    strb r0, [r1, r2]    ; nameByteX[i+1] = 0xFF (2nd byte marker)
+
+    mov  r0, #1
+    str  r0, [sp, #0]    ; y = 1
+    mov  r0, #0xFF
+    str  r0, [sp, #4]    ; speed = 0xFF
+    mov  r0, #0
+    str  r0, [sp, #8]    ; callback = NULL
+    ldr  r0, ={FN_ADD_TEXT_PRINTER_PARAM}
+    mov  r12, r0
+    mov  r0, r5          ; winId
+    mov  r1, #1          ; fontId = 1
+    add  r2, sp, #12     ; str
+    mov  r3, r8          ; curX
+    bl   CallR12
+
+    mov  r0, r8
+    add  r0, #12
+    mov  r8, r0
+    add  r6, #2
+    b    @@DrawCharLoop
+
+@@SingleByteChar:
+    add  r3, sp, #12
+    strb r0, [r3, #0]
+    mov  r0, #0xFF
+    strb r0, [r3, #1]
+
+    mov  r0, #1
+    str  r0, [sp, #0]
+    mov  r0, #0xFF
+    str  r0, [sp, #4]
+    mov  r0, #0
+    str  r0, [sp, #8]
+    ldr  r0, ={FN_ADD_TEXT_PRINTER_PARAM}
+    mov  r12, r0
+    mov  r0, r5
+    mov  r1, #1
+    add  r2, sp, #12
+    mov  r3, r8
+    bl   CallR12
+
+    mov  r0, r8
+    add  r0, #8
+    mov  r8, r0
+    add  r6, #1
+    b    @@DrawCharLoop
+
+@@DrawCharDone:
+    ldr  r0, =0x00001F58
+    add  r0, r4, r0
+    strb r6, [r0, #0]    ; nameEndByte
+    mov  r1, r8
+    strb r1, [r0, #1]    ; nameEndX
+
+    ldr  r3, ={FN_UPDATE_HINT} ; UpdateHint?
+    bl   CallR3
+    mov  r0, r5
+    mov  r1, #2
+    ldr  r3, ={FN_COPY_WINDOW_TO_VRAM} ; CopyWindowToVram(winId, COPYWIN_GFX=2)
+    bl   CallR3
+    mov  r0, r5
+    ldr  r3, ={FN_PUT_WINDOW_TILEMAP} ; PutWindowTilemap(winId)
+    bl   CallR3
+
+    add  sp, #16
+    pop  {r5-r7}
+    mov  r8, r5
+    mov  r9, r6
+    mov  r10, r7
+    pop  {r4-r7, pc}
+    .pool
+
+; ----------------------------------------------------------------------------
+; Hook_UnderlineCallback (0x08920144): positions underline sprites by visual X
+; ----------------------------------------------------------------------------
+.align 2
+Hook_UnderlineCallback:
+    push {r4-r7, lr}
+    mov  r4, r0          ; sprite ptr
+    ldr  r5, ={RAM_NAMING_SCREEN_PTR}
+    ldr  r5, [r5]
+
+    ldrh r6, [r4, #0x2E] ; slot index (0..maxChars-1)
+    ldr  r0, =0x00001F58
+    add  r0, r5, r0
+    ldrb r7, [r0, #0]    ; nameEndByte
+    ldrb r1, [r0, #1]    ; nameEndX
+
+    ldr  r0, =0x00001F08
+    add  r0, r5, r0
+    ldrh r0, [r0, #0]
+    sub  r0, #64
+    cmp  r0, #0
+    bge  @@U_BaseOk
+    mov  r0, #0
+@@U_BaseOk:
+    ldr  r2, =0x00001F3B
+    add  r2, r5, r2
+    ldrb r2, [r2, #0]    ; maxChars
+    cmp  r2, #0
+    beq  @@U_Done
+
+    cmp  r6, r7
+    bge  @@U_AtOrAfterEnd
+    ; Before textEnd: check if byte is 2nd byte of Chinese (0xFF)
+    ldr  r3, =0x00001F48
+    add  r3, r5, r3
+    ldrb r3, [r3, r6]
+    cmp  r3, #0xFF
+    beq  @@U_Hide
+    add  r3, #64
+    strh r3, [r4, #0x20] ; sprite->pos1.x
+    b    @@U_Static
+
+@@U_AtOrAfterEnd:
+    bne  @@U_AfterEnd
+    ; At exact textEnd -> blinking underline at 64 + endX!
+    add  r1, #64
+    strh r1, [r4, #0x20]
+    ; Show sprite (clear invisible bit 4 at +0x3E)
+    mov  r3, r4
+    add  r3, #0x3E
+    ldrb r0, [r3, #0]
+    mov  r1, #4
+    bic  r0, r1
+    strb r0, [r3, #0]
+    ; Blink logic matching original 0x08920170
+    b    @@U_Blink
+
+@@U_AfterEnd:
+    ; Empty trailing slot at endX + (slot - endByte) * 8
+    sub  r3, r6, r7
+    lsl  r3, r3, #3
+    add  r1, r1, r3      ; X inside Win[2]
+    ; Compute right limit = baseLeft + (maxChars - 1) * 8
+    sub  r2, r2, #1
+    lsl  r2, r2, #3
+    add  r0, r0, r2
+    cmp  r1, r0
+    bgt  @@U_Hide
+    add  r1, #64
+    strh r1, [r4, #0x20]
+
+@@U_Static:
+    mov  r3, r4
+    add  r3, #0x3E
+    ldrb r0, [r3, #0]
+    mov  r1, #4
+    bic  r0, r1
+    strb r0, [r3, #0]
+    mov  r0, #0
+    strh r0, [r4, #0x26]
+    strh r0, [r4, #0x30]
+    strh r0, [r4, #0x32]
+    b    @@U_Done
+
+@@U_Hide:
+    mov  r3, r4
+    add  r3, #0x3E
+    ldrb r0, [r3, #0]
+    mov  r1, #4
+    orr  r0, r1
+    strb r0, [r3, #0]
+    b    @@U_Done
+
+@@U_Blink:
+    ldrh r0, [r4, #0x30]
+    lsl  r0, r0, #1
+    ldr  r1, ={TBL_UNDERLINE_BLINK}
+    add  r0, r0, r1
+    ldrh r0, [r0, #0]
+    strh r0, [r4, #0x26]
+    ldrh r0, [r4, #0x32]
+    add  r0, #1
+    strh r0, [r4, #0x32]
+    cmp  r0, #8
+    ble  @@U_Done
+    ldrh r0, [r4, #0x30]
+    add  r0, #1
+    mov  r1, #3
+    and  r0, r1
+    strh r0, [r4, #0x30]
+    mov  r0, #0
+    strh r0, [r4, #0x32]
+
+@@U_Done:
+    pop  {r4-r7, pc}
+    .pool
