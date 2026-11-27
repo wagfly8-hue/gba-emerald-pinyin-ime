@@ -89,6 +89,13 @@ python build_pinyin_ime.py \
 
 - 仅支持 **宝可梦绿宝石（`BPEE`）及 `pokeemerald-expansion` 衍生改版**。
 - **不直接支持**火红（`BPRE`）或红蓝宝石（`AXVE` / `AXPE`），因命名界面结构体与 UI 布局不同。
+<img width="240" height="160" alt="image" src="https://github.com/user-attachments/assets/9055afa1-fab5-47ea-90e7-3d36fce156fe" />
+<img width="240" height="160" alt="image" src="https://github.com/user-attachments/assets/8c5bacfc-848c-4156-b15b-e8d9a44d9b83" />
+<img width="240" height="160" alt="image" src="https://github.com/user-attachments/assets/0749403e-f51a-49be-bea3-b1ee615f383d" />
+<img width="240" height="160" alt="image" src="https://github.com/user-attachments/assets/bc536139-c8e0-4cf4-8e9c-842d981cd682" />
+
+
+
 
 ## 声明
 
